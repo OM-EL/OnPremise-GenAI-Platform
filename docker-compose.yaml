@@ -1,0 +1,153 @@
+version: "1"
+
+services:
+  # Container Responsibility:
+  #   1. UI (Frontend)
+  #   2. Backend
+  #   3. Database (Conversation history, users, etc.)
+  #   4. Vectorial Database (ChromaDB)
+  # Container Type: Worker
+  webui:
+    image: ghcr.io/open-webui/open-webui:latest
+    ports:
+      - "3000:8080"
+    networks:
+      - webui_network
+    depends_on:
+      - litellm
+    environment:
+      - no_proxy=chromadb-service
+      - OPENAI_API_BASE_URLS=http://litellm:4000
+      - OPENAI_API_BASE=http://litellm:4000
+      - RAG_OPENAI_API_BASE_URL=http://litellm:4000
+      - RAG_EMBEDDING_ENGINE=openai
+      - RAG_EMBEDDING_MODEL=bedrock/amazon.titan-embed-image-v1
+      - GLOBAL_LOG_LEVEL=DEBUG
+      - ENABLE_OLLAMA_API=false
+      - RAG_OPENAI_API_KEY=litellm-secret
+      - OPENAI_API_KEY=litellm-secret
+      - OPENAI_API_KEYS=litellm-secret
+      - WEBUI_SECRET_KEY=webui_secret_key
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          cpus: "2"
+          memory: 2G
+
+  # Container Responsibility:
+  #   1. Middleware / proxy between the web UI and LLM provider (AWS, OpenAI, GCP, etc.)
+  #   2. Rate limiter (limits the number of requests according to defined rules)
+  #   3. Cost monitor (monitors the cost of the requests)
+  #   4. Cache manager (can connect to Redis for cache layer)
+  # Container Type: Worker
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    depends_on:
+      - db-litellm
+    networks:
+      - webui_network
+    environment:
+      - DATABASE_URL=postgresql://postgres:your_litellm_postgres_password@db-litellm:5432/litellmdb
+      - LITELLM_MASTER_KEY=litellm-secret
+      - AWS_ACCESS_KEY_ID=XXXXXXX # Replace with actual value
+      - AWS_SECRET_ACCESS_KEY=XXXXXXXXX # Replace with actual value
+      - AWS_REGION_NAME=XXXXXXXXX # Replace with actual value
+      - LANGFUSE_HOST=http://langfuse:3000
+      - LANGFUSE_SECRET_KEY=lf_sk_1234567890
+      - LANGFUSE_PUBLIC_KEY=lf_pk_1234567890
+      - STORE_MODEL_IN_DB=true
+    volumes:
+      - type: bind
+        source: /Users/omarelhachimi/Desktop/Workplace/Step-by-Step-Tutorial/conf/litellm/config.yaml
+        target: /app/config.yaml
+    deploy:
+      replicas: 1
+    command: ["--config", "/app/config.yaml"]
+
+  # Container Responsibility: Store data of litellm (e.g., call history, rate-limiting rules)
+  # Container Type: Worker
+  db-litellm:
+    image: postgres:latest
+    ports:
+      - "5433:5432"
+    networks:
+      - webui_network
+    environment:
+      - POSTGRES_PASSWORD=your_litellm_postgres_password
+      - POSTGRES_DB=litellmdb
+      - POSTGRES_USER=postgres
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  # Container Responsibility:
+  #   1. Monitoring tools (track all calls to the LLM and their responses)
+  #   2. Testing tools (build testing datasets, automate tests)
+  # Container Type: Worker
+  langfuse:
+    image: langfuse/langfuse:latest
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    networks:
+      - webui_network
+    ports:
+      - "3002:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:your_postgres_password@langfuse-db:5432/langfusedb
+      - NEXTAUTH_SECRET=mysecret
+      - SALT=mysalt
+      - NEXTAUTH_URL=http://localhost:3002
+      - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      - LANGFUSE_INIT_ORG_ID=my-org
+      - LANGFUSE_INIT_ORG_NAME=My Org
+      - LANGFUSE_INIT_PROJECT_ID=my-project
+      - LANGFUSE_INIT_PROJECT_NAME=My Project
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=lf_pk_1234567890
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=lf_sk_1234567890
+      - LANGFUSE_INIT_USER_EMAIL=admin@lol.fr
+      - LANGFUSE_INIT_USER_NAME=admin
+      - LANGFUSE_INIT_USER_PASSWORD=mypassword
+
+  # Container Responsibility: Langfuse database
+  # Container Type: Worker
+  langfuse-db:
+    image: postgres
+    restart: always
+    networks:
+      - webui_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_postgres_password
+      - POSTGRES_DB=langfusedb
+    ports:
+      - "5435:5432"
+
+networks:
+  webui_network:
+    driver: bridge
+
+volumes:
+  config-volume:
+    driver: local
+    driver_opts:
+      type: none
+      device: ....../conf/litellm # Replace with the actual absolute path to the config file
+      o: bind

@@ -1,0 +1,10 @@
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+model_list:
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+  - model_name: titan
+    litellm_params:
+      model: bedrock/amazon.titan-embed-image-v1
